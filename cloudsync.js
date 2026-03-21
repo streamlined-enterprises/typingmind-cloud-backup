@@ -3870,6 +3870,8 @@ async download(key, isMetadata = false) {
 
         this.logger.log("start", "[Force Export] Uploading all local items...");
         let uploadedCount = 0;
+        let exportSuccessCount = 0;
+        let exportFailCount = 0;
         let skippedTombstones = 0;
         for await (const batch of this.dataService.streamAllItemsInternal()) {
           const CHUNK = 5;
@@ -3894,7 +3896,14 @@ async download(key, isMetadata = false) {
                 );
               }
             });
-            await Promise.allSettled(uploadPromises);
+            const results = await Promise.allSettled(uploadPromises);
+            for (const r of results) {
+              if (r.status === "fulfilled") exportSuccessCount++;
+              else {
+                exportFailCount++;
+                this.logger.log("error", `[Force Export] Item upload failed: ${r.reason?.message || r.reason}`);
+              }
+            }
             if (ci + CHUNK < batch.length) {
               await new Promise(r => setTimeout(r, 300));
             }
@@ -3903,10 +3912,20 @@ async download(key, isMetadata = false) {
           this.logger.log(
             "info",
             `[Force Export] Uploaded batch. Total: ${uploadedCount}/${localKeys.size}` +
+              (exportFailCount > 0 ? ` (${exportFailCount} failed)` : "") +
               (skippedTombstones > 0 ? ` (${skippedTombstones} tombstones skipped)` : "")
           );
         }
-        this.logger.log("success", "[Force Export] All local items uploaded.");
+        if (exportFailCount > 0 && exportSuccessCount === 0) {
+          throw new Error(`Export failed: all ${exportFailCount} items failed to upload.`);
+        }
+        if (exportFailCount > 0) {
+          this.logger.log(
+            "warning",
+            `[Force Export] Completed with ${exportFailCount} failures out of ${exportSuccessCount + exportFailCount} items.`
+          );
+        }
+        this.logger.log("success", `[Force Export] ${exportSuccessCount} local items uploaded.`);
 
         const keysToDelete = [...cloudKeys].filter(
           (key) => !localKeys.has(key)
@@ -4030,6 +4049,8 @@ async download(key, isMetadata = false) {
         );
         const allCloudItems = Object.entries(cloudMetadata.items);
         const concurrency = 20;
+        let importSuccessCount = 0;
+        let importFailCount = 0;
         for (let i = 0; i < allCloudItems.length; i += concurrency) {
           const batch = allCloudItems.slice(i, i + concurrency);
           const downloadPromises = batch.map(async ([key, cloudItem]) => {
@@ -4048,17 +4069,33 @@ async download(key, isMetadata = false) {
               }
             }
           });
-          await Promise.allSettled(downloadPromises);
+          const results = await Promise.allSettled(downloadPromises);
+          for (const r of results) {
+            if (r.status === "fulfilled") importSuccessCount++;
+            else {
+              importFailCount++;
+              this.logger.log("error", `[Force Import] Item failed: ${r.reason?.message || r.reason}`);
+            }
+          }
           this.logger.log(
             "info",
             `[Force Import] Processed batch. Total: ${i + batch.length}/${
               allCloudItems.length
-            }`
+            }` + (importFailCount > 0 ? ` (${importFailCount} failed)` : "")
+          );
+        }
+        if (importFailCount > 0 && importSuccessCount === 0) {
+          throw new Error(`Import failed: all ${importFailCount} items failed to download or save.`);
+        }
+        if (importFailCount > 0) {
+          this.logger.log(
+            "warning",
+            `[Force Import] Completed with ${importFailCount} failures out of ${importSuccessCount + importFailCount} items.`
           );
         }
         this.logger.log(
           "success",
-          "[Force Import] All cloud items applied locally."
+          `[Force Import] ${importSuccessCount} cloud items applied locally.`
         );
 
         this.metadata = cloudMetadata;
@@ -6360,6 +6397,7 @@ async download(key, isMetadata = false) {
         const originalText = forceExportBtn.textContent;
         forceExportBtn.disabled = true;
         forceExportBtn.textContent = "Exporting...";
+        forceImportBtn.disabled = true;
         try {
           await this.syncOrchestrator.forceExportToCloud();
           forceExportBtn.textContent = "Success!";
@@ -6371,6 +6409,7 @@ async download(key, isMetadata = false) {
           setTimeout(() => {
             forceExportBtn.textContent = originalText;
             forceExportBtn.disabled = false;
+            forceImportBtn.disabled = false;
             this.loadSyncDiagnostics(modal);
           }, 2000);
         }
@@ -6386,20 +6425,21 @@ async download(key, isMetadata = false) {
         const originalText = forceImportBtn.textContent;
         forceImportBtn.disabled = true;
         forceImportBtn.textContent = "Importing...";
+        forceExportBtn.disabled = true;
         try {
           await this.syncOrchestrator.forceImportFromCloud();
+          forceImportBtn.textContent = "Success!";
           alert(
             "Force Import from Cloud completed successfully. The page will now reload to apply the new data."
           );
-          setTimeout(() => {
-            window.location.reload();
-          }, 3000);
+          window.location.reload();
         } catch (error) {
           forceImportBtn.textContent = "Failed";
           alert(`Force Import failed: ${error.message}`);
           setTimeout(() => {
             forceImportBtn.textContent = originalText;
             forceImportBtn.disabled = false;
+            forceExportBtn.disabled = false;
             this.loadSyncDiagnostics(modal);
           }, 2000);
         }
