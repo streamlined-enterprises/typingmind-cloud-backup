@@ -90,17 +90,9 @@ if (window.typingMindCloudSync) {
     }
 
     // Derives a 256-bit AES-GCM key from the given passphrase using PBKDF2.
-    // Uses the same per-install salt that CryptoService uses so that the two
-    // components are consistent (salt is NOT a secret; it prevents rainbow tables).
+    // Uses a fixed salt for cross-device compatibility.
     async _deriveConfigKey(passphrase) {
-      const SALT_STORAGE_KEY = "tcs_pbkdf2_salt";
-      let saltB64 = localStorage.getItem(SALT_STORAGE_KEY);
-      if (!saltB64) {
-        const newSalt = crypto.getRandomValues(new Uint8Array(16));
-        saltB64 = btoa(String.fromCharCode(...newSalt));
-        localStorage.setItem(SALT_STORAGE_KEY, saltB64);
-      }
-      const salt = Uint8Array.from(atob(saltB64), c => c.charCodeAt(0));
+      const salt = new TextEncoder().encode("typingmind-cloud-sync-v1-pbkdf2-salt");
       const enc = new TextEncoder();
       const keyMaterial = await crypto.subtle.importKey(
         "raw", enc.encode(passphrase), { name: "PBKDF2" }, false, ["deriveKey"]
@@ -1026,16 +1018,8 @@ if (window.typingMindCloudSync) {
         this.keyCache.delete(firstKey);
       }
 
-      // Derive a persistent per-install salt stored in localStorage (not a secret,
-      // just prevents cross-device rainbow tables).
-      const SALT_STORAGE_KEY = "tcs_pbkdf2_salt";
-      let saltB64 = localStorage.getItem(SALT_STORAGE_KEY);
-      if (!saltB64) {
-        const newSalt = crypto.getRandomValues(new Uint8Array(16));
-        saltB64 = btoa(String.fromCharCode(...newSalt));
-        localStorage.setItem(SALT_STORAGE_KEY, saltB64);
-      }
-      const salt = Uint8Array.from(atob(saltB64), c => c.charCodeAt(0));
+      // Fixed salt for cross-device compatibility
+      const salt = new TextEncoder().encode("typingmind-cloud-sync-v1-pbkdf2-salt");
 
       const enc = new TextEncoder();
       const keyMaterial = await crypto.subtle.importKey(
@@ -1195,8 +1179,19 @@ if (window.typingMindCloudSync) {
           );
           return JSON.parse(new TextDecoder().decode(decrypted));
         }
-      } catch (e) {
-        return JSON.parse(new TextDecoder().decode(decrypted));
+      } catch (decompressionError) {
+        // Fallback for data encrypted before CompressionStream was introduced
+        // (uncompressed plaintext was encrypted directly).
+        try {
+          return JSON.parse(new TextDecoder().decode(decrypted));
+        } catch (jsonError) {
+          throw new Error(
+            `Decryption succeeded but decompression/parsing failed. ` +
+            `Decompression error: ${decompressionError.message}. ` +
+            `JSON fallback error: ${jsonError.message}. ` +
+            `This usually means the data was encrypted with a different key or on a different device.`
+          );
+        }
       }
     }
     async decryptBytes(encryptedData) {
