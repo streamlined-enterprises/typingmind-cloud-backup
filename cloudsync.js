@@ -266,7 +266,7 @@ if (window.typingMindCloudSync) {
     set(key, value) {
       this.config[key] = value;
     }
-    save() {
+    async save() {
       const encryptionKey = this.config.encryptionKey;
       const keyMap = {
         storageType: "tcs_storagetype",
@@ -280,9 +280,9 @@ if (window.typingMindCloudSync) {
         googleClientId: "tcs_google_clientid",
       };
 
-      Object.keys(this.config).forEach((key) => {
+      for (const key of Object.keys(this.config)) {
         const storageKey = keyMap[key];
-        if (!storageKey) return;
+        if (!storageKey) continue;
 
         let valueToStore = this.config[key]?.toString() || "";
 
@@ -291,10 +291,10 @@ if (window.typingMindCloudSync) {
           valueToStore &&
           encryptionKey
         ) {
-          valueToStore = "enc::" + this._obfuscate(valueToStore, encryptionKey);
+          valueToStore = "enc::" + await this._obfuscate(valueToStore, encryptionKey);
         }
         localStorage.setItem(storageKey, valueToStore);
-      });
+      }
     }
     shouldExclude(key) {
       const always = key.startsWith("tcs_");
@@ -1941,7 +1941,7 @@ async download(key, isMetadata = false) {
               logger
             );
             await tempProvider.initialize();
-            await tempProvider.handleAuthentication();
+            await tempProvider.handleAuthentication({ interactive: true });
 
             googleAuthStatus.textContent =
               "✅ Authentication successful! Please Save & Verify.";
@@ -1949,7 +1949,7 @@ async download(key, isMetadata = false) {
             googleAuthBtn.textContent = "Re-authenticate";
           } catch (error) {
             logger.log("error", "Google authentication failed", error);
-            googleAuthStatus.textContent = `❌ Auth failed: ${error.message}`;
+            googleAuthStatus.textContent = `❌ Auth failed: ${error?.message || String(error)}`;
             googleAuthStatus.style.color = "#ef4444";
             googleAuthBtn.textContent = "Sign in with Google";
           } finally {
@@ -2382,14 +2382,12 @@ async download(key, isMetadata = false) {
             ? await this.crypto.encryptBytes(data) 
             : await this.crypto.encrypt(data, itemKey || key); 
         const blob = new Blob([body], {
-          type: isMetadata ? "application/json" : "application/octet-stream",
+          type: "application/octet-stream",
         });
 
         const metadata = {
           name: filename,
-          mimeType: isMetadata
-            ? "application/json"
-            : "application/octet-stream",
+          mimeType: "application/octet-stream",
         };
         if (!existingFile) {
           metadata.parents = [parentId];
@@ -2471,13 +2469,14 @@ async download(key, isMetadata = false) {
         const rawBuffer = await response.arrayBuffer();
         const bodyBytes = new Uint8Array(rawBuffer);
         if (isMetadata) {
-          let jsonString;
+          let parsed;
           try {
-            jsonString = await this.crypto.decrypt(bodyBytes, "metadata");
+            parsed = await this.crypto.decrypt(bodyBytes, "metadata");
           } catch (_) {
-            jsonString = new TextDecoder().decode(bodyBytes).trim();
+            // Legacy fallback: metadata was stored as plain JSON before this fix.
+            parsed = JSON.parse(new TextDecoder().decode(bodyBytes).trim());
           }
-          return JSON.parse(jsonString);
+          return parsed;
         } else {
           const isAttachment = key.startsWith("attachments/");
           if (isAttachment) {
@@ -5791,7 +5790,7 @@ async download(key, isMetadata = false) {
             this.config.set(key, urlConfig.config[key]);
           }
         });
-        this.config.save();
+        await this.config.save();
         this.logger.log("info", "Applied and saved URL parameters to config.");
         this.removeConfigFromUrl();
       }
@@ -7259,7 +7258,7 @@ async download(key, isMetadata = false) {
           "✅ Credentials verified! Saving configuration...";
         actionMsg.style.color = "#22c55e";
 
-        this.config.save();
+        await this.config.save();
 
         this.logger.log(
           "success",
