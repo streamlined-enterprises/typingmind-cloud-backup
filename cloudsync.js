@@ -1297,6 +1297,10 @@ if (window.typingMindCloudSync) {
       throw new Error("Method 'downloadWithResponse()' must be implemented.");
     }
 
+    async headObject(key) {
+      throw new Error("Method 'headObject()' must be implemented.");
+    }
+
     async copyObject(sourceKey, destinationKey) {
       throw new Error("Method 'copyObject()' must be implemented.");
     }
@@ -1781,6 +1785,22 @@ async download(key, isMetadata = false) {
         }
       );
     }
+
+    async headObject(key) {
+      return retryAsync(
+        async () => {
+          const result = await this.client
+            .headObject({ Bucket: this.config.get("bucketName"), Key: key })
+            .promise();
+          return { ETag: result.ETag };
+        },
+        {
+          isRetryable: (error) =>
+            !(error.code === "NoSuchKey" || error.statusCode === 404),
+        }
+      );
+    }
+
     async copyObject(sourceKey, destinationKey) {
       return retryAsync(
         async () => {
@@ -2613,6 +2633,21 @@ async download(key, isMetadata = false) {
           ...file,
           ETag: file.modifiedTime,
         };
+      });
+    }
+
+    async headObject(key) {
+      return this._operationWithRetry(async () => {
+        await this.handleAuthentication();
+        const file = await this._getFileMetadata(key);
+        if (!file) {
+          const error = new Error(`File not found in Google Drive: ${key}`);
+          error.code = "NoSuchKey";
+          error.statusCode = 404;
+          throw error;
+        }
+        // Return the revision ID (etag) from the file metadata
+        return { ETag: file.modifiedTime };
       });
     }
 
@@ -3793,11 +3828,19 @@ async download(key, isMetadata = false) {
         return { metadata: { lastSync: 0, items: {} }, etag: null };
       }
       try {
-        const result = await this.storageService.downloadWithResponse(
-          "metadata.json"
-        );
-        const metadata = JSON.parse(result.Body.toString());
-        const etag = result.ETag;
+        // Use download() with isMetadata=true to handle AES-GCM decryption
+        // and legacy plaintext fallback for migration from unencrypted buckets
+        const metadata = await this.storageService.download("metadata.json", true);
+        
+        // Get ETag separately via headObject for change detection
+        let etag = null;
+        try {
+          const headResult = await this.storageService.headObject("metadata.json");
+          etag = headResult.ETag;
+        } catch (headError) {
+          // headObject may fail for some providers; that's okay
+        }
+        
         if (!metadata || typeof metadata !== "object") {
           return { metadata: { lastSync: 0, items: {} }, etag };
         }
