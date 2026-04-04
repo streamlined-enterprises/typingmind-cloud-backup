@@ -2138,23 +2138,15 @@ async download(key, isMetadata = false) {
           script.crossOrigin = "anonymous";
         }
         script.onload = resolve;
-        script.onerror = reject;
+        script.onerror = (event) => reject(new Error(`Failed to load script: ${src}`));
         document.head.appendChild(script);
       });
     }
 
     async _loadGapiAndGis() {
       if (this.gapiReady && this.gisReady) return;
-      await this._loadScript(
-        "gapi-client-script",
-        "https://apis.google.com/js/api.js",
-        "sha384-g64Y2rxnMkygAR8l69comjp8tBeEw0wKGPzjF1Ze8A5GVOpH8f/3DXzKZIvRnhja"
-      );
-      await this._loadScript(
-        "gis-client-script",
-        "https://accounts.google.com/gsi/client",
-        "sha384-BJKnQuO9Gw3IuRbgNU+XcOY9fXGPbgigJKeSnT5xypvHZppazYmhQQ7tlZo8QuBa"
-      );
+      await this._loadScript("gapi-client-script", "https://apis.google.com/js/api.js");
+      await this._loadScript("gis-client-script", "https://accounts.google.com/gsi/client");
       this.gapiReady = true;
       this.gisReady = true;
     }
